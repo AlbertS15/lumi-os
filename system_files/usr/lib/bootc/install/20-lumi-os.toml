@@ -1,0 +1,3 @@
+# The root filesystem for new installs (ISO, disk images, bootc install): btrfs, as on Fedora Silverblue.
+[install.filesystem.root]
+type = "btrfs"
