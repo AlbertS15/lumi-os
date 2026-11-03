@@ -1,0 +1,28 @@
+#!/bin/bash
+# Lumi OS: Fedora Silverblue from Universal Blue with Lumi built in.
+
+set -ouex pipefail
+
+# Wallpaper, GNOME defaults and Lumi's autostart for new accounts.
+cp -avf "/ctx/system_files"/. /
+
+# Lumi itself: the .rpm from the latest release, with its dependencies from Fedora.
+rpm_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest |
+  grep -o '"browser_download_url": *"[^"]*x86_64\.rpm"' | cut -d'"' -f4)
+dnf5 install -y "$rpm_url" plocate
+test -x /usr/bin/lumi
+
+# Apply the GNOME defaults above.
+glib-compile-schemas /usr/share/glib-2.0/schemas
+
+# The name in Settings → About and the boot menu. ID stays fedora, so tools that check for Fedora keep working.
+sed -i \
+  -e 's/^NAME=.*/NAME="Lumi OS"/' \
+  -e 's/^PRETTY_NAME=.*/PRETTY_NAME="Lumi OS"/' \
+  -e 's|^HOME_URL=.*|HOME_URL="https://github.com/AlbertS15/lumi-os"|' \
+  -e 's|^BUG_REPORT_URL=.*|BUG_REPORT_URL="https://github.com/AlbertS15/lumi-os/issues"|' \
+  /usr/lib/os-release
+grep -q '^VARIANT_ID=' /usr/lib/os-release && sed -i 's/^VARIANT_ID=.*/VARIANT_ID=lumi-os/' /usr/lib/os-release || echo 'VARIANT_ID=lumi-os' >> /usr/lib/os-release
+
+# plocate's index refreshes daily, so Lumi finds files by name.
+systemctl enable plocate-updatedb.timer

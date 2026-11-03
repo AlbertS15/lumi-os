@@ -1,0 +1,18 @@
+# Lumi OS defaults: the ghost wallpaper and Lumi first in the dash. People can change all of it in Settings.
+[org.gnome.desktop.background]
+picture-uri='file:///usr/share/backgrounds/lumi/lumi.png'
+picture-uri-dark='file:///usr/share/backgrounds/lumi/lumi.png'
+picture-options='zoom'
+primary-color='#0e0f0f'
+
+[org.gnome.desktop.screensaver]
+picture-uri='file:///usr/share/backgrounds/lumi/lumi.png'
+picture-options='zoom'
+primary-color='#0e0f0f'
+
+[org.gnome.desktop.interface]
+color-scheme='prefer-dark'
+accent-color='teal'
+
+[org.gnome.shell]
+favorite-apps=['lumi.desktop', 'org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Ptyxis.desktop', 'org.gnome.Software.desktop']
