@@ -19,3 +19,6 @@ favorite-apps=['lumi.desktop', 'org.mozilla.firefox.desktop', 'org.gnome.Nautilu
 
 [org.gnome.desktop.datetime]
 automatic-timezone=true
+
+[org.gnome.desktop.input-sources]
+sources=[('xkb', 'us'), ('xkb', 'ru')]

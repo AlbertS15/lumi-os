@@ -12,6 +12,9 @@ rpm_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest
 dnf5 install -y "$rpm_url" plocate
 test -x /usr/bin/lumi
 
+# The Fedora logo in the corner of the desktop; Lumi OS has its own wallpaper.
+dnf5 remove -y gnome-shell-extension-background-logo || true
+
 # Apply the GNOME defaults above.
 glib-compile-schemas /usr/share/glib-2.0/schemas
 
