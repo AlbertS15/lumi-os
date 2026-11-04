@@ -24,6 +24,17 @@ test -x /usr/bin/lumi
 # The Fedora logo in the corner of the desktop; Lumi OS has its own wallpaper.
 dnf5 remove -y gnome-shell-extension-background-logo || true
 
+# Packages only the "GNOME Classic" login session uses (Lumi OS ships the normal GNOME session):
+# the session itself, its four shell extensions, and the first-login tour that the first setup
+# makes redundant. Only what is installed is removed, and the list of removed packages is printed.
+cut=()
+for p in gnome-classic-session gnome-shell-extension-apps-menu gnome-shell-extension-launch-new-instance \
+  gnome-shell-extension-places-menu gnome-shell-extension-window-list gnome-tour; do
+  rpm -q "$p" >/dev/null 2>&1 && cut+=("$p")
+done
+((${#cut[@]})) && dnf5 remove -y "${cut[@]}"
+dnf5 clean all
+
 # Apply the GNOME defaults above.
 glib-compile-schemas /usr/share/glib-2.0/schemas
 
