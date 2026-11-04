@@ -99,8 +99,25 @@ jobs:
           echo "BASE_IMAGE=quay.io/fedora/fedora-silverblue:${version}" >> $GITHUB_ENV
           echo "Base image: quay.io/fedora/fedora-silverblue:${version}"
 
+      # The arm64 .rpm comes from AlbertS15/Lumi#1 and may not be released yet. Without it, the arm64 leg
+      # stops here with a warning (it does not fail), and the manifest job keeps arm64's last image, if any.
+      - name: Lumi .rpm for this CPU
+        id: lumi
+        run: |
+          if curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest |
+              grep -q '"browser_download_url": *"[^"]*-${{ matrix.arch }}\.rpm"'; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          elif [ '${{ matrix.platform }}' = amd64 ]; then
+            echo "::error::The latest Lumi release has no ${{ matrix.arch }} .rpm"
+            exit 1
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "::warning::The latest Lumi release has no ${{ matrix.arch }} .rpm yet; skipping the ${{ matrix.platform }} build"
+          fi
+
       # This actually builds the container image
       - name: Build Image
+        if: steps.lumi.outputs.available == 'true'
         id: build-image
         run: |
           just build \
@@ -108,6 +125,7 @@ jobs:
             ${DEFAULT_TAG}
 
       - name: Check the image is for this CPU and has Lumi
+        if: steps.lumi.outputs.available == 'true'
         run: |
           set -euo pipefail
           podman image inspect ${IMAGE_NAME}:${DEFAULT_TAG} --format '{{.Architecture}}' | grep -qx '${{ matrix.platform }}'
@@ -121,6 +139,7 @@ jobs:
 
       # This is optional, this provides smaller delta updates
       - name: Rechunk with rpm-ostree
+        if: steps.lumi.outputs.available == 'true'
         id: rechunk
         run: |
           just ostree-rechunk \
@@ -141,14 +160,14 @@ jobs:
       # They also check if the runner is on the default branch so that things like the merge queue (if you enable it), are going to work
       - name: Login to GitHub Container Registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: steps.lumi.outputs.available == 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push To GHCR
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: steps.lumi.outputs.available == 'true' && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         id: push-image
         run: |
           set -euox pipefail
