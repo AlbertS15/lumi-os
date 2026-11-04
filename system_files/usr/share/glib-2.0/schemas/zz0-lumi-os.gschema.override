@@ -16,3 +16,6 @@ accent-color='teal'
 
 [org.gnome.shell]
 favorite-apps=['lumi.desktop', 'org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Ptyxis.desktop', 'org.gnome.Software.desktop']
+
+[org.gnome.desktop.datetime]
+automatic-timezone=true
