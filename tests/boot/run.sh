@@ -185,9 +185,8 @@ else
   fail "lumi running after login" "no lumi process for $user"
 fi
 
-# Test-only session tweaks: no screen blanking, and GNOME Shell's window list readable over D-Bus.
+# Test-only session tweak: no screen blanking.
 as_user gsettings set org.gnome.desktop.session idle-delay 0 || true
-as_user gsettings set org.gnome.shell introspect true || true
 
 kb_schema=org.gnome.settings-daemon.plugins.media-keys
 kb_path=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/lumi/
@@ -203,55 +202,57 @@ else
   fail "Lumi GNOME shortcut set" "list=$(as_user gsettings get $kb_schema custom-keybindings 2>&1) command=${kb_command:-?} binding=${kb_binding:-?}"
 fi
 
-# Ctrl+Space: Lumi's bar should open.
-windows() { as_user gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell/Introspect \
-  --method org.gnome.Shell.Introspect.GetWindows 2>&1; }
-# Window ids from GetWindows output, with "lumi" after the id when the window's properties mention Lumi.
-window_ids() { python3 -c '
-import re, sys
-parts = re.split(r"uint64 (\d+): \{", sys.stdin.read())
-for i in range(1, len(parts), 2):
-    print(parts[i], "lumi" if re.search("lumi", parts[i + 1], re.I) else "")'; }
+# Ctrl+Space: GNOME should run Lumi's shortcut command and Lumi's bar should appear.
+# GNOME 50 has no D-Bus window list for outside callers (Introspect.GetWindows is denied), so the bar is detected by
+# comparing screenshots, and the shortcut firing by gsd-media-keys' "Application launched" line in the user journal.
+shortcut_runs() {
+  vm "journalctl -b -o cat _UID=\$(id -u $user) | grep -c 'lumi.*launched by gsd-media-keys'" 2>/dev/null || true
+}
+# Percent of the screen that differs between two screenshots.
+changed_percent() {
+  [[ -n $1 && -n $2 ]] || { echo 0; return; }
+  local changed w h
+  changed=$(compare -metric AE -fuzz 10% "$1" "$2" null: 2>&1 | awk '{ printf "%d", $1 }')
+  read -r w h < <(identify -format '%w %h' "$2")
+  echo $((${changed:-0} * 100 / (w * h)))
+}
 
 sleep 20 # let the session settle after login
-shot desktop-after-login >/dev/null
-opened=""
+shot desktop-after-login
+# First login lands in the overview with GNOME's "Welcome" dialog on top, which takes the keyboard: close both the
+# way a person would.
+mon "sendkey esc"
+sleep 2
+mon "sendkey esc"
+sleep 3
+shot desktop-after-esc
+
+fired="" opened=""
 for attempt in 1 2; do
+  runs_before=$(shortcut_runs)
   shot "before-ctrl-space-$attempt"
   before_png=$last_shot
-  windows > "$out/logs/windows-before-$attempt.txt"
   mon "sendkey ctrl-spc"
   sleep 6
   shot "after-ctrl-space-$attempt"
   after_png=$last_shot
-  windows > "$out/logs/windows-after-$attempt.txt"
-
-  if grep -q 'uint64' "$out/logs/windows-after-$attempt.txt"; then
-    new=$(comm -13 <(window_ids < "$out/logs/windows-before-$attempt.txt" | sort) \
-      <(window_ids < "$out/logs/windows-after-$attempt.txt" | sort))
-    if grep -q lumi <<<"$new"; then
-      opened="a new Lumi window appeared (GNOME Shell window list, press $attempt)"
-    elif [[ -n $new ]]; then
-      opened="a new window appeared, not named Lumi (press $attempt): $(tr '\n' ' ' <<<"$new")"
-    fi
-  else
-    # No window list from GNOME Shell: compare the screenshots instead.
-    note "GNOME Shell window list unavailable, comparing screenshots: $(head -c 200 "$out/logs/windows-after-$attempt.txt")"
-    if [[ -n $before_png && -n $after_png ]]; then
-      changed=$(compare -metric AE -fuzz 10% "$before_png" "$after_png" null: 2>&1 | cut -d' ' -f1)
-      total=$(identify -format '%[fx:w*h]' "$after_png")
-      if [[ $changed =~ ^[0-9]+$ ]] && ((changed * 100 > total * 2)); then
-        opened="the screen changed after the key press ($changed of $total pixels, press $attempt)"
-      fi
-    fi
-  fi
-  [[ -n $opened ]] && break
+  runs_after=$(shortcut_runs)
+  ((${runs_after:-0} > ${runs_before:-0})) && fired="gsd-media-keys ran Lumi's command (press $attempt)"
+  pct=$(changed_percent "$before_png" "$after_png")
+  log "press $attempt: shortcut runs $runs_before -> $runs_after, screen changed $pct%"
+  ((pct >= 2)) && opened="$pct% of the screen changed after the key press (press $attempt)"
+  [[ -n $fired && -n $opened ]] && break
   sleep 5
 done
-if [[ -n $opened ]]; then
-  pass "Ctrl+Space opens Lumi's bar" "$opened"
+if [[ -n $fired ]]; then
+  pass "Ctrl+Space runs Lumi's shortcut" "$fired"
 else
-  fail "Ctrl+Space opens Lumi's bar" "no new window after two presses (see screenshots and windows-*.txt)"
+  fail "Ctrl+Space runs Lumi's shortcut" "no 'launched by gsd-media-keys' for lumi in the user journal after two presses"
+fi
+if [[ -n $opened ]]; then
+  pass "Lumi's bar appears on Ctrl+Space" "$opened"
+else
+  fail "Lumi's bar appears on Ctrl+Space" "screen unchanged after two presses (see screenshots)"
 fi
 
 # --- Logs ---------------------------------------------------------------------------------------------------------
