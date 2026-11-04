@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
-# Measures a Lumi OS image: its size, then how fast a qcow2 made from it boots in QEMU/KVM.
+# Measures Lumi OS images: their size, then how fast a qcow2 made from each boots in QEMU/KVM.
 #
-#   sudo tools/boot-bench.sh <image in root's container storage> <output dir> [boots]
+#   sudo tools/boot-bench.sh <output dir> <boots> <label=image> [<label=image> ...]
 #
 # Needs root (podman, bootc-image-builder, /dev/kvm), qemu-system-x86_64 and OVMF.
+# Several images are measured in ONE run on the same machine and their boots are interleaved
+# (a, b, a, b, ...), so host speed and noise hit all of them alike. Separate CI runners differ
+# by up to 2x, which would drown the differences being measured.
 # Boot 1 is the first boot (one-time setup); boots 2..N are what a user sees every day.
 
 set -euo pipefail
 
-image=$1
-out=$(realpath -m "$2")
-boots=${3:-4}
+out=$(realpath -m "$1")
+boots=$2
+shift 2
+labels=()
+declare -A images
+for pair in "$@"; do
+  labels+=("${pair%%=*}")
+  images[${pair%%=*}]=${pair#*=}
+done
 bib=${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder:latest}
 work=$(mktemp -d -p "${BENCH_TMP:-/var/tmp}")
 mkdir -p "$out"
@@ -18,25 +27,9 @@ mkdir -p "$out"
 log() { echo "::group::$*"; }
 end() { echo "::endgroup::"; }
 
-# --- Image size -----------------------------------------------------------------------------
-log "Image size"
-podman image inspect --format '{{.Size}}' "$image" > "$out/image-bytes.txt"
-podman run --rm --entrypoint /bin/bash "$image" -c '
-  echo "rpm_count $(rpm -qa | wc -l)"
-  echo "usr_bytes $(du -sxb /usr | cut -f1)"
-' > "$out/image-stats.txt"
-podman run --rm --entrypoint /bin/bash "$image" -c \
-  "rpm -qa --qf '%{SIZE}\t%{NAME}\n' | sort -n" > "$out/rpms-by-size.txt"
-podman run --rm --entrypoint /bin/bash "$image" -c \
-  'systemctl list-unit-files --state=enabled --no-legend --no-pager' > "$out/enabled-units.txt" || true
-cat "$out/image-bytes.txt" "$out/image-stats.txt"
-end
-
-# --- qcow2 ------------------------------------------------------------------------------------
 # A copy of the image with a reporter: once systemd says the boot is finished, it prints
 # systemd-analyze to the serial port and powers the VM off. It is a timer + a Type=exec
 # service, so it is not part of the boot transaction and does not hold up what it measures.
-log "Build qcow2"
 cat > "$work/lumi-bench-report" <<'SH'
 #!/bin/bash
 export SYSTEMD_COLORS=0
@@ -62,52 +55,80 @@ COPY --chmod=0755 lumi-bench-report /usr/libexec/
 COPY lumi-bench-report.service lumi-bench-report.timer /usr/lib/systemd/system/
 RUN systemctl enable lumi-bench-report.timer
 EOF
-podman build --build-arg IMAGE="$image" -t localhost/lumi-bench:vm -f "$work/Containerfile" "$work"
 cat > "$work/config.toml" <<'EOF'
 [[customizations.filesystem]]
 mountpoint = "/"
 minsize = "20 GiB"
 EOF
-mkdir -p "$work/output"
-podman run --rm --privileged --pull=newer \
-  --security-opt label=type:unconfined_t \
-  -v "$work/config.toml:/config.toml:ro" \
-  -v "$work/output:/output" \
-  -v /var/lib/containers/storage:/var/lib/containers/storage \
-  "$bib" --type qcow2 --rootfs btrfs --use-librepo=True localhost/lumi-bench:vm
-disk=$work/output/qcow2/disk.qcow2
-du -b "$disk" | cut -f1 > "$out/qcow2-bytes.txt"
-end
 
-# --- Boots ------------------------------------------------------------------------------------
-cp /usr/share/OVMF/OVMF_VARS_4M.fd "$work/vars.fd"
-for n in $(seq 1 "$boots"); do
-  log "Boot $n"
-  serial=$out/serial-$n.log
-  timeout 20m qemu-system-x86_64 -enable-kvm -cpu host -machine q35 -smp 4 -m 8G \
-    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-    -drive if=pflash,format=raw,file="$work/vars.fd" \
-    -drive file="$disk",if=virtio,format=qcow2 \
-    -nic user,model=virtio-net-pci \
-    -display none -vga virtio -serial file:"$serial" || true
-  report=$(tr -d '\r' < "$serial" | sed -n '/===BENCH-BEGIN===/,/===BENCH-END===/p')
-  if [[ -z $report ]]; then
-    echo "Boot $n: no report on the serial port" | tee -a "$out/errors.txt"
-    tail -c 4000 "$serial" || true
-    exit 1
-  fi
-  section() { sed -n "/^---$1\$/,/^---/p" <<<"$report" | sed -e '1d' -e '/^---/d' -e '/^===/d'; }
-  section analyze > "$out/boot-$n-analyze.txt"
-  section blame > "$out/boot-$n-blame.txt"
-  section critical-chain > "$out/boot-$n-critical-chain.txt"
-  section failed > "$out/boot-$n-failed.txt"
-  cat "$out/boot-$n-analyze.txt"
-  head -25 "$out/boot-$n-blame.txt"
-  cat "$out/boot-$n-critical-chain.txt" "$out/boot-$n-failed.txt"
+prepare() {
+  local label=$1 image=$2 o w
+  o=$out/$label
+  w=$work/$label
+  mkdir -p "$o" "$w/output"
+
+  log "Image size: $label"
+  podman image inspect --format '{{.Size}}' "$image" > "$o/image-bytes.txt"
+  podman run --rm --entrypoint /bin/bash "$image" -c '
+    echo "rpm_count $(rpm -qa | wc -l)"
+    echo "usr_bytes $(du -sxb /usr | cut -f1)"
+  ' > "$o/image-stats.txt"
+  podman run --rm --entrypoint /bin/bash "$image" -c \
+    "rpm -qa --qf '%{SIZE}\t%{NAME}\n' | sort -n" > "$o/rpms-by-size.txt"
+  podman run --rm --entrypoint /bin/bash "$image" -c \
+    'systemctl list-unit-files --state=enabled --no-legend --no-pager' > "$o/enabled-units.txt" || true
+  cat "$o/image-bytes.txt" "$o/image-stats.txt"
   end
+
+  log "Build qcow2: $label"
+  podman build --build-arg IMAGE="$image" -t "localhost/lumi-bench:$label" -f "$work/Containerfile" "$work"
+  podman run --rm --privileged --pull=newer \
+    --security-opt label=type:unconfined_t \
+    -v "$work/config.toml:/config.toml:ro" \
+    -v "$w/output:/output" \
+    -v /var/lib/containers/storage:/var/lib/containers/storage \
+    "$bib" --type qcow2 --rootfs btrfs --use-librepo=True "localhost/lumi-bench:$label"
+  du -b "$w/output/qcow2/disk.qcow2" | cut -f1 > "$o/qcow2-bytes.txt"
+  cp /usr/share/OVMF/OVMF_VARS_4M.fd "$w/vars.fd"
+  # The image is no longer needed; free the disk for the next one.
+  podman rmi -f "localhost/lumi-bench:$label" >/dev/null || true
+  end
+}
+
+for label in "${labels[@]}"; do prepare "$label" "${images[$label]}"; done
+
+# --- Boots: interleaved across the images ----------------------------------------------------------
+for n in $(seq 1 "$boots"); do
+  for label in "${labels[@]}"; do
+    o=$out/$label
+    w=$work/$label
+    log "Boot $n: $label"
+    serial=$o/serial-$n.log
+    timeout 20m qemu-system-x86_64 -enable-kvm -cpu host -machine q35 -smp 4 -m 8G \
+      -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+      -drive if=pflash,format=raw,file="$w/vars.fd" \
+      -drive file="$w/output/qcow2/disk.qcow2",if=virtio,format=qcow2 \
+      -nic user,model=virtio-net-pci \
+      -display none -vga virtio -serial file:"$serial" || true
+    report=$(tr -d '\r' < "$serial" | sed -n '/===BENCH-BEGIN===/,/===BENCH-END===/p')
+    if [[ -z $report ]]; then
+      echo "Boot $n ($label): no report on the serial port" | tee -a "$o/errors.txt"
+      tail -c 4000 "$serial" || true
+      exit 1
+    fi
+    section() { sed -n "/^---$1\$/,/^---/p" <<<"$report" | sed -e '1d' -e '/^---/d' -e '/^===/d'; }
+    section analyze > "$o/boot-$n-analyze.txt"
+    section blame > "$o/boot-$n-blame.txt"
+    section critical-chain > "$o/boot-$n-critical-chain.txt"
+    section failed > "$o/boot-$n-failed.txt"
+    cat "$o/boot-$n-analyze.txt"
+    head -25 "$o/boot-$n-blame.txt"
+    cat "$o/boot-$n-critical-chain.txt" "$o/boot-$n-failed.txt"
+    end
+  done
 done
 
-# --- Summary ----------------------------------------------------------------------------------
+# --- Summary ------------------------------------------------------------------------------------
 # "Startup finished in 1.2s (kernel) + 3.4s (initrd) + 5.6s (userspace) = 10.2s"
 # "graphical.target reached after 5.5s in userspace."
 to_s() {  # systemd time span ("1min 2.345s", "812ms") -> seconds
@@ -116,16 +137,19 @@ to_s() {  # systemd time span ("1min 2.345s", "812ms") -> seconds
     else if (v ~ /ms$/) { sub(/ms$/,"",v); t+=v/1000 }
     else if (v ~ /s$/) { sub(/s$/,"",v); t+=v } } printf "%.3f\n", t }'
 }
-{
-  echo "boot,kernel_s,initrd_s,userspace_s,total_s,graphical_target_s"
-  for n in $(seq 1 "$boots"); do
-    line=$(grep -m1 '^Startup finished' "$out/boot-$n-analyze.txt")
-    part() { grep -o "[0-9][^+=]*($1)" <<<"$line" | sed "s/ *($1)//" | to_s; }
-    total=$(sed 's/.*= //' <<<"$line" | to_s)
-    gt=$(grep -o 'graphical.target reached after .* in userspace' "$out/boot-$n-analyze.txt" |
-      sed -e 's/graphical.target reached after //' -e 's/ in userspace//' | to_s)
-    echo "$n,$(part kernel),$(part initrd),$(part userspace),$total,$gt"
-  done
-} > "$out/summary.csv"
-cat "$out/summary.csv"
+for label in "${labels[@]}"; do
+  o=$out/$label
+  {
+    echo "boot,kernel_s,initrd_s,userspace_s,total_s,graphical_target_s"
+    for n in $(seq 1 "$boots"); do
+      line=$(grep -m1 '^Startup finished' "$o/boot-$n-analyze.txt")
+      part() { grep -o "[0-9][^+=]*($1)" <<<"$line" | sed "s/ *($1)//" | to_s; }
+      total=$(sed 's/.*= //' <<<"$line" | to_s)
+      gt=$(grep -o 'graphical.target reached after .* in userspace' "$o/boot-$n-analyze.txt" |
+        sed -e 's/graphical.target reached after //' -e 's/ in userspace//' | to_s)
+      echo "$n,$(part kernel),$(part initrd),$(part userspace),$total,$gt"
+    done
+  } > "$o/summary.csv"
+  echo "== $label"; cat "$o/summary.csv"
+done
 rm -rf "$work"
