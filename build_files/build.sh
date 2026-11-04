@@ -7,9 +7,18 @@ set -ouex pipefail
 cp -avf "/ctx/system_files"/. /
 
 # Lumi itself: the .rpm from the latest release, with its dependencies from Fedora.
-rpm_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest |
-  grep -o '"browser_download_url": *"[^"]*x86_64\.rpm"' | cut -d'"' -f4)
-dnf5 install -y "$rpm_url" plocate
+# CI puts it in build_files/lumi-rpm/ (cached per release, see .github/actions/lumi-rpm).
+# A local build without it fetches it through the API asset endpoint, which, unlike the
+# browser download link, does not add to the release's public download counter.
+lumi_rpm=$(ls /ctx/lumi-rpm/*.rpm 2>/dev/null | head -1 || true)
+if [[ -z $lumi_rpm ]]; then
+  asset_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest | python3 -c '
+import json, sys
+print(next(a["url"] for a in json.load(sys.stdin)["assets"] if a["name"].endswith("x86_64.rpm")))')
+  lumi_rpm=/tmp/lumi-launcher.x86_64.rpm
+  curl -fsSL -H 'Accept: application/octet-stream' -o "$lumi_rpm" "$asset_url"
+fi
+dnf5 install -y "$lumi_rpm" plocate
 test -x /usr/bin/lumi
 
 # The Fedora logo in the corner of the desktop; Lumi OS has its own wallpaper.
