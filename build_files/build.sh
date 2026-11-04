@@ -49,7 +49,10 @@ gtk-update-icon-cache -f /usr/share/icons/hicolor || true
 # GDM login screen settings (dconf database "gdm" is part of GDM's profile).
 dconf update
 
-# Boot splash: make Lumi the default Plymouth theme and rebuild the initramfs, which bootc boots from.
+# Boot splash: the script plugin the theme needs is a separate package.
+dnf5 install -y plymouth-plugin-script
+
+# Make Lumi the default Plymouth theme and rebuild the initramfs, which bootc boots from.
 plymouth-set-default-theme lumi
 kver=$(cd /usr/lib/modules && echo *)
 DRACUT_NO_XATTR=1 dracut --no-hostonly --kver "$kver" --reproducible --add "ostree plymouth" -f "/usr/lib/modules/$kver/initramfs.img"
