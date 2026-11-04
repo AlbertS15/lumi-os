@@ -1,0 +1,7 @@
+# Login screen: dark with the teal accent and the Lumi ghost instead of the Fedora logo.
+[org/gnome/login-screen]
+logo='/usr/share/pixmaps/lumi-gdm-logo.png'
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+accent-color='teal'
