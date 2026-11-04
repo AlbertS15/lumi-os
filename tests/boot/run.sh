@@ -208,13 +208,13 @@ fi
 shortcut_runs() {
   vm "journalctl -b -o cat _UID=\$(id -u $user) | grep -c 'lumi.*launched by gsd-media-keys'" 2>/dev/null || true
 }
-# Percent of the screen that differs between two screenshots.
-changed_percent() {
+# Per mille of the screen that differs between two screenshots (a bar is small, so 0.1% is already a change).
+changed_permille() {
   [[ -n $1 && -n $2 ]] || { echo 0; return; }
   local changed w h
-  changed=$(compare -metric AE -fuzz 10% "$1" "$2" null: 2>&1 | awk '{ printf "%d", $1 }')
+  changed=$(compare -metric AE -fuzz 5% "$1" "$2" "${2%.png}-diff.png" 2>&1 | awk '{ printf "%d", $1 }')
   read -r w h < <(identify -format '%w %h' "$2")
-  echo $((${changed:-0} * 100 / (w * h)))
+  echo $((${changed:-0} * 1000 / (w * h)))
 }
 
 sleep 20 # let the session settle after login
@@ -238,9 +238,9 @@ for attempt in 1 2; do
   after_png=$last_shot
   runs_after=$(shortcut_runs)
   ((${runs_after:-0} > ${runs_before:-0})) && fired="gsd-media-keys ran Lumi's command (press $attempt)"
-  pct=$(changed_percent "$before_png" "$after_png")
-  log "press $attempt: shortcut runs $runs_before -> $runs_after, screen changed $pct%"
-  ((pct >= 2)) && opened="$pct% of the screen changed after the key press (press $attempt)"
+  pct=$(changed_permille "$before_png" "$after_png")
+  log "press $attempt: shortcut runs $runs_before -> $runs_after, screen changed ${pct} per mille"
+  ((pct >= 1)) && opened="$pct per mille of the screen changed after the key press (press $attempt)"
   [[ -n $fired && -n $opened ]] && break
   sleep 5
 done
