@@ -25,11 +25,11 @@ test -x /usr/bin/lumi
 dnf5 remove -y gnome-shell-extension-background-logo || true
 
 # Packages only the "GNOME Classic" login session uses (Lumi OS ships the normal GNOME session):
-# the session itself, its four shell extensions, and the first-login tour that the first setup
-# makes redundant. Only what is installed is removed, and the list of removed packages is printed.
+# the session itself and its four shell extensions. gnome-tour stays: GNOME Shell's first-login
+# "Welcome" dialog offers it, and removing it saved nothing measurable. Only what is installed is removed.
 cut=()
 for p in gnome-classic-session gnome-shell-extension-apps-menu gnome-shell-extension-launch-new-instance \
-  gnome-shell-extension-places-menu gnome-shell-extension-window-list gnome-tour; do
+  gnome-shell-extension-places-menu gnome-shell-extension-window-list; do
   rpm -q "$p" >/dev/null 2>&1 && cut+=("$p")
 done
 ((${#cut[@]})) && dnf5 remove -y "${cut[@]}"
