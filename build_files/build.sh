@@ -6,11 +6,17 @@ set -ouex pipefail
 # Wallpaper, GNOME defaults and Lumi's autostart for new accounts.
 cp -avf "/ctx/system_files"/. /
 
-# Lumi itself: the .rpm from the latest release, with its dependencies from Fedora.
+# Lumi itself: the .rpm for this CPU (x86_64 or aarch64) from the latest release, with its dependencies from Fedora.
+arch=$(uname -m)
 rpm_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest |
-  grep -o '"browser_download_url": *"[^"]*x86_64\.rpm"' | cut -d'"' -f4)
+  grep -o "\"browser_download_url\": *\"[^\"]*-${arch}\\.rpm\"" | cut -d'"' -f4 | head -n1) || true
+if [ -z "$rpm_url" ]; then
+  echo "Found no ${arch} .rpm in the latest Lumi release" >&2
+  exit 1
+fi
 dnf5 install -y "$rpm_url" plocate
 test -x /usr/bin/lumi
+test "$(rpm -q --qf '%{ARCH}' lumi-launcher)" = "$arch"
 
 # The Fedora logo in the corner of the desktop; Lumi OS has its own wallpaper.
 dnf5 remove -y gnome-shell-extension-background-logo || true

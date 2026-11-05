@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       disk-run-id:
-        description: "Run ID of a 'Build disk images' run to test (empty: the newest qcow2 artifact)"
+        description: "Run ID of a 'Build disk images' run to test (empty: the newest qcow2-amd64 artifact)"
         required: false
         type: string
   pull_request:
@@ -50,21 +50,37 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id || inputs.disk-run-id }}
         run: |
           set -euo pipefail
+          # Disk runs since the multi-arch change name the artifact qcow2-<cpu>; older runs used plain "qcow2" (x86_64 only).
+          find_run() {
+            gh api "repos/$REPO/actions/artifacts?name=$1&per_page=20" \
+              --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty'
+          }
+          NAME=qcow2-amd64
           if [[ -z "$RUN_ID" ]]; then
-            RUN_ID=$(gh api "repos/$REPO/actions/artifacts?name=qcow2&per_page=20" \
-              --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+            RUN_ID=$(find_run qcow2-amd64)
+            if [[ -z "$RUN_ID" ]]; then
+              NAME=qcow2
+              RUN_ID=$(find_run qcow2)
+            fi
+          else
+            names=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+              --jq '[.artifacts[] | select(.expired | not) | .name] | join(",")')
+            if [[ ",$names," != *,qcow2-amd64,* ]]; then
+              if [[ ",$names," == *,qcow2,* ]]; then
+                NAME=qcow2
+              else
+                # Only the amd64 disk can boot on this x86_64 runner; a run that built just arm64 has nothing to test.
+                echo "::notice::Run $RUN_ID has no amd64 qcow2 artifact (arm64 only?); the boot test only runs x86_64."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
           fi
           if [[ -z "$RUN_ID" ]]; then
             echo "::error::No qcow2 artifact found; run 'Build disk images' first."
             exit 1
           fi
-          # The arm64 disk can't boot on this x86_64 runner.
-          labels=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --jq '[.jobs[].labels[]] | join(",")')
-          if [[ "$labels" == *arm* ]]; then
-            echo "::notice::Run $RUN_ID built arm64 disks; the boot test only runs x86_64."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          echo "artifact=$NAME" >> "$GITHUB_OUTPUT"
           echo "Testing the qcow2 from https://github.com/$REPO/actions/runs/$RUN_ID"
           echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
@@ -74,7 +90,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh run download "${{ steps.disk.outputs.run-id }}" -R "${{ github.repository }}" -n qcow2 -D "$RUNNER_TEMP/disk"
+          gh run download "${{ steps.disk.outputs.run-id }}" -R "${{ github.repository }}" -n "${{ steps.disk.outputs.artifact }}" -D "$RUNNER_TEMP/disk"
           disk=$(find "$RUNNER_TEMP/disk" -name '*.qcow2' | head -1)
           test -n "$disk"
           ls -la "$disk"

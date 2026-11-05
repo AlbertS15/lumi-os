@@ -1,10 +1,14 @@
+# Base image. Universal Blue publishes silverblue-main for x86-64 only, so the arm64 build
+# (.github/workflows/build.yml) passes BASE_IMAGE=quay.io/fedora/fedora-silverblue:<same Fedora version>,
+# the plain Fedora Silverblue that silverblue-main itself is built on.
+ARG BASE_IMAGE=ghcr.io/ublue-os/silverblue-main:latest
+
 # Allow build scripts to be referenced without being copied into the final image
 FROM scratch AS ctx
 COPY build_files /
 COPY system_files /system_files
 
-# Base Image
-FROM ghcr.io/ublue-os/silverblue-main:latest
+FROM ${BASE_IMAGE}
 ## Other possible base images include:
 # FROM ghcr.io/ublue-os/bazzite:testing
 # FROM ghcr.io/ublue-os/aurora:stable

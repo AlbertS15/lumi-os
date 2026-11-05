@@ -22,14 +22,16 @@ systemctl reboot
 
 Going back: `sudo bootc switch` to the image you had, or pick the previous entry in the boot menu.
 
-**From scratch:** download the installer ISO from [Releases](https://github.com/AlbertS15/lumi-os/releases/latest) (no GitHub account needed) and write it to a USB stick with [Fedora Media Writer](https://fedoraproject.org/workstation/download) or [balenaEtcher](https://etcher.balena.io). GitHub limits release files to 2 GiB, so a bigger ISO comes in parts; the release notes show how to join them and check the checksum. x86-64 only for now, and this is an early version: the installer erases the disk you pick.
+**From scratch:** download the installer ISO from [Releases](https://github.com/AlbertS15/lumi-os/releases/latest) (no GitHub account needed) and write it to a USB stick with [Fedora Media Writer](https://fedoraproject.org/workstation/download) or [balenaEtcher](https://etcher.balena.io). GitHub limits release files to 2 GiB, so a bigger ISO comes in parts; the release notes show how to join them and check the checksum. The release ISO is x86-64 only for now, and this is an early version: the installer erases the disk you pick.
 
 New releases come from the "Release ISO" workflow: push a `v*` tag, or Actions → Release ISO → Run workflow with a version. It builds the ISO, attaches it with `SHA256SUMS` to a draft release, and the draft is published by hand.
 
+**ARM (Apple Silicon Macs in UTM, ARM laptops):** the image is multi-arch (amd64 and arm64), so the same `bootc switch` works on aarch64. For a VM, run "Build disk images" (Actions → Build disk images → Run workflow) with platform `arm64` (or `both`) and use the `qcow2-arm64` or `anaconda-iso-arm64` artifact.
+
 ## How it's built
 
-- `Containerfile` starts from `ghcr.io/ublue-os/silverblue-main:latest` and runs `build_files/build.sh`.
-- `build_files/build.sh` installs Lumi's `.rpm` from the latest release and applies the files in `system_files/`.
+- `Containerfile` starts from `ghcr.io/ublue-os/silverblue-main:latest` and runs `build_files/build.sh`. Universal Blue builds that image for x86-64 only, so the arm64 image starts from `quay.io/fedora/fedora-silverblue` at the same Fedora version (without Universal Blue's extras such as RPM Fusion codecs).
+- `build_files/build.sh` installs Lumi's `.rpm` for the image's CPU (`x86_64` or `aarch64`) from the latest release and applies the files in `system_files/`.
 - `system_files/` holds the wallpaper, the GNOME defaults (`zz0-lumi-os.gschema.override`) and Lumi's autostart entry for new accounts.
 - `tools/wallpaper.py` draws the wallpaper.
 - GitHub Actions rebuilds the image every day, so Fedora updates and new Lumi releases arrive on their own.
