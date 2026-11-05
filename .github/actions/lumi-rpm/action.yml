@@ -26,8 +26,16 @@ runs:
       run: |
         set -euo pipefail
         # Reading release metadata through the API never counts as a download.
-        gh api repos/AlbertS15/Lumi/releases/latest \
-          --jq '.tag_name as $t | .assets[] | select(.name | endswith(env.ARCH + ".rpm")) | "tag=\($t)\nasset_id=\(.id)\nname=\(.name)"' \
+        # x86_64 takes the latest stable release. aarch64 also takes pre-releases (v2.1.0-beta.1 and so
+        # on) until a stable release ships an aarch64 rpm: the newest release that has one.
+        if [ "$ARCH" = x86_64 ]; then
+          api=repos/AlbertS15/Lumi/releases/latest; pick='.'
+        else
+          api='repos/AlbertS15/Lumi/releases?per_page=20'
+          pick='[.[] | select(.draft | not) | select(any(.assets[]; .name | endswith(env.ARCH + ".rpm")))][0]'
+        fi
+        gh api "$api" \
+          --jq "$pick"' | .tag_name as $t | .assets[] | select(.name | endswith(env.ARCH + ".rpm")) | "tag=\($t)\nasset_id=\(.id)\nname=\(.name)"' \
           | head -3 >> "$GITHUB_OUTPUT"
 
     - name: Cache the rpm

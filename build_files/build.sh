@@ -13,9 +13,14 @@ cp -avf "/ctx/system_files"/. /
 arch=$(uname -m)
 lumi_rpm=$(ls /ctx/lumi-rpm/*"${arch}".rpm 2>/dev/null | head -1 || true)
 if [[ -z $lumi_rpm ]]; then
-  asset_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest | ARCH="$arch" python3 -c '
+  # x86_64: the latest stable release. aarch64: the newest release with an aarch64 rpm, pre-releases too.
+  api=https://api.github.com/repos/AlbertS15/Lumi/releases/latest
+  [[ $arch == x86_64 ]] || api='https://api.github.com/repos/AlbertS15/Lumi/releases?per_page=20'
+  asset_url=$(curl -fsSL "$api" | ARCH="$arch" python3 -c '
 import json, os, sys
-print(next((a["url"] for a in json.load(sys.stdin)["assets"] if a["name"].endswith(os.environ["ARCH"] + ".rpm")), ""))')
+d = json.load(sys.stdin)
+rels = [d] if isinstance(d, dict) else [r for r in d if not r["draft"]]
+print(next((a["url"] for r in rels for a in r["assets"] if a["name"].endswith(os.environ["ARCH"] + ".rpm")), ""))')
   if [[ -z $asset_url ]]; then
     echo "Found no ${arch} .rpm in the latest Lumi release" >&2
     exit 1
