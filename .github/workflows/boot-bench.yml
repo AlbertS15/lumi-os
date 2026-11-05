@@ -71,7 +71,8 @@ jobs:
           s = open(p).read()
           s, n = re.subn(r'rpm_url=.*?\ndnf5 install -y "\$rpm_url" plocate',
                          'dnf5 install -y /ctx/lumi-rpm/*.rpm plocate', s, flags=re.S)
-          assert n == 1, "base build.sh has an unexpected rpm step"
+          # Since the rpm cache landed, the base already installs /ctx/lumi-rpm and needs no patch.
+          assert n == 1 or "/ctx/lumi-rpm" in s, "base build.sh has an unexpected rpm step"
           open(p, "w").write(s)
           PY
           sudo podman pull ghcr.io/ublue-os/silverblue-main:latest
