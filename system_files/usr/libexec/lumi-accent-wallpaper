@@ -1,0 +1,20 @@
+#!/bin/bash
+# Keeps the ghost on the Lumi wallpaper in the GNOME accent colour (Settings → Appearance).
+# Runs in each session from /etc/xdg/autostart. A wallpaper the person picked themselves is left alone.
+dir=/usr/share/backgrounds/lumi
+
+apply() {
+  local accent file current
+  accent=$(gsettings get org.gnome.desktop.interface accent-color | tr -d "'")
+  file=$dir/lumi-$accent.png
+  [[ -f $file ]] || file=$dir/lumi.png
+  current=$(gsettings get org.gnome.desktop.background picture-uri | tr -d "'")
+  [[ $current == "file://$dir/"* ]] || return 0
+  [[ $current == "file://$file" ]] && return 0
+  gsettings set org.gnome.desktop.background picture-uri "file://$file"
+  gsettings set org.gnome.desktop.background picture-uri-dark "file://$file"
+  gsettings set org.gnome.desktop.screensaver picture-uri "file://$file"
+}
+
+apply
+gsettings monitor org.gnome.desktop.interface accent-color | while read -r _; do apply; done
