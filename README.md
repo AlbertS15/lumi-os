@@ -8,7 +8,7 @@ Fedora Silverblue from [Universal Blue](https://universal-blue.org) with [Lumi](
 
 - Lumi from its latest release, started at login; the first login opens its welcome window.
 - `plocate` with a daily index, so Lumi finds files by name.
-- The ghost wallpaper, dark theme with a teal accent, Lumi first in the dash.
+- The ghost wallpaper, dark theme with a teal accent, Lumi first in the dash. Change the accent colour in Settings → Appearance and the ghost on the wallpaper follows it.
 - Everything else is Fedora Silverblue as Universal Blue ships it: updates arrive as a whole new image and can be rolled back.
 
 ## Try it

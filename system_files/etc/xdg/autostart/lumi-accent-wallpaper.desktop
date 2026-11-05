@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Lumi wallpaper colour
+Comment=Keeps the ghost on the Lumi wallpaper in the accent colour
+Exec=/usr/libexec/lumi-accent-wallpaper
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications

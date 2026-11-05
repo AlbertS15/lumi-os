@@ -74,11 +74,15 @@ def main():
     # GDM login screen and legacy pixmaps users of the Fedora logo look for.
     pm = ROOT / "pixmaps"
     pm.mkdir(parents=True, exist_ok=True)
-    gdm = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-    g = scaled(sprite(1), 14)
-    gdm.paste(g, ((256 - g.width) // 2, (256 - g.height) // 2), g)
+    # GDM draws its logo under the user list; at 256 px it covered "Not listed?", so it is small and wide.
+    gdm = Image.new("RGBA", (192, 64), (0, 0, 0, 0))
+    g = scaled(sprite(1), 4)
+    gdm.paste(g, ((192 - g.width) // 2, (64 - g.height) // 2), g)
     gdm.save(pm / "lumi-gdm-logo.png", optimize=True)
-    gdm.save(pm / "lumi-logo.png", optimize=True)
+    big = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    g = scaled(sprite(1), 14)
+    big.paste(g, ((256 - g.width) // 2, (256 - g.height) // 2), g)
+    big.save(pm / "lumi-logo.png", optimize=True)
 
 
 if __name__ == "__main__":
