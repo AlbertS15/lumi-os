@@ -1,0 +1,38 @@
+# Lumi boot splash: the pixel ghost (teal on dark) floating up and down.
+Window.SetBackgroundTopColor(0.055, 0.059, 0.059);
+Window.SetBackgroundBottomColor(0.055, 0.059, 0.059);
+
+frame[0] = Image("ghost0.png");
+frame[1] = Image("ghost1.png");
+ghost = Sprite();
+ghost.SetPosition(Window.GetWidth() / 2 - frame[0].GetWidth() / 2,
+                  Window.GetHeight() / 2 - frame[0].GetHeight() / 2, 10);
+tick = 0;
+
+fun refresh() {
+  tick++;
+  ghost.SetImage(frame[Math.Int(tick / 30) % 2]);
+}
+Plymouth.SetRefreshFunction(refresh);
+
+# Disk encryption passphrase: the prompt and a row of dots under the ghost.
+prompt = Sprite();
+dots = Sprite();
+fun password(text, bullets) {
+  prompt.SetImage(Image.Text(text, 0.37, 0.83, 0.68));
+  prompt.SetPosition(Window.GetWidth() / 2 - prompt.GetImage().GetWidth() / 2,
+                     Window.GetHeight() / 2 + frame[0].GetHeight() / 2 + 40, 10);
+  s = "";
+  for (i = 0; i < bullets; i++) s += "*";
+  dots.SetImage(Image.Text(s, 0.37, 0.83, 0.68));
+  dots.SetPosition(Window.GetWidth() / 2 - dots.GetImage().GetWidth() / 2,
+                   Window.GetHeight() / 2 + frame[0].GetHeight() / 2 + 80, 10);
+  prompt.SetOpacity(1);
+  dots.SetOpacity(1);
+}
+Plymouth.SetDisplayPasswordFunction(password);
+fun normal() {
+  prompt.SetOpacity(0);
+  dots.SetOpacity(0);
+}
+Plymouth.SetDisplayNormalFunction(normal);

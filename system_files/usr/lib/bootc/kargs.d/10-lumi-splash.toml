@@ -1,0 +1,2 @@
+# Boot with the Plymouth splash instead of kernel messages.
+kargs = ["rhgb", "quiet", "splash"]

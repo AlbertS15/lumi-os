@@ -4,6 +4,11 @@ description: >
   The file is cached per release, so the daily build fetches it only once per new release
   and does not inflate the release's public download counter.
 
+inputs:
+  arch:
+    description: CPU of the rpm, x86_64 or aarch64
+    default: x86_64
+
 outputs:
   tag:
     description: Tag of the latest Lumi release
@@ -17,11 +22,12 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        ARCH: ${{ inputs.arch }}
       run: |
         set -euo pipefail
         # Reading release metadata through the API never counts as a download.
         gh api repos/AlbertS15/Lumi/releases/latest \
-          --jq '.tag_name as $t | .assets[] | select(.name | endswith("x86_64.rpm")) | "tag=\($t)\nasset_id=\(.id)\nname=\(.name)"' \
+          --jq '.tag_name as $t | .assets[] | select(.name | endswith(env.ARCH + ".rpm")) | "tag=\($t)\nasset_id=\(.id)\nname=\(.name)"' \
           | head -3 >> "$GITHUB_OUTPUT"
 
     - name: Cache the rpm
@@ -30,7 +36,7 @@ runs:
       with:
         path: build_files/lumi-rpm
         # The asset id changes if a release's rpm is re-uploaded, so a fixed file is picked up too.
-        key: lumi-rpm-${{ steps.release.outputs.tag }}-${{ steps.release.outputs.asset_id }}
+        key: lumi-rpm-${{ inputs.arch }}-${{ steps.release.outputs.tag }}-${{ steps.release.outputs.asset_id }}
 
     - name: Download the rpm
       if: steps.cache.outputs.cache-hit != 'true'

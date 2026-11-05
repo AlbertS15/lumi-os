@@ -99,6 +99,10 @@ build $target_image=image_name $tag=default_tag:
     set -euox pipefail
 
     BUILD_ARGS=()
+    # The arm64 build sets BASE_IMAGE: silverblue-main is x86-64 only (see Containerfile).
+    if [[ -n "${BASE_IMAGE:-}" ]]; then
+        BUILD_ARGS+=("--build-arg" "BASE_IMAGE=${BASE_IMAGE}")
+    fi
     LABELS=()
     if [[ -z "$(git status -s)" ]]; then
         GIT_SHA=$(git rev-parse --short HEAD)

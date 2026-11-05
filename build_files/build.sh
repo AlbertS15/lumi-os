@@ -6,20 +6,26 @@ set -ouex pipefail
 # Wallpaper, GNOME defaults and Lumi's autostart for new accounts.
 cp -avf "/ctx/system_files"/. /
 
-# Lumi itself: the .rpm from the latest release, with its dependencies from Fedora.
-# CI puts it in build_files/lumi-rpm/ (cached per release, see .github/actions/lumi-rpm).
-# A local build without it fetches it through the API asset endpoint, which, unlike the
-# browser download link, does not add to the release's public download counter.
-lumi_rpm=$(ls /ctx/lumi-rpm/*.rpm 2>/dev/null | head -1 || true)
+# Lumi itself: the .rpm for this CPU (x86_64 or aarch64) from the latest release, with its
+# dependencies from Fedora. CI puts it in build_files/lumi-rpm/ (cached per release, see
+# .github/actions/lumi-rpm). A local build without it fetches it through the API asset endpoint,
+# which, unlike the browser download link, does not add to the release's public download counter.
+arch=$(uname -m)
+lumi_rpm=$(ls /ctx/lumi-rpm/*"${arch}".rpm 2>/dev/null | head -1 || true)
 if [[ -z $lumi_rpm ]]; then
-  asset_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest | python3 -c '
-import json, sys
-print(next(a["url"] for a in json.load(sys.stdin)["assets"] if a["name"].endswith("x86_64.rpm")))')
-  lumi_rpm=/tmp/lumi-launcher.x86_64.rpm
+  asset_url=$(curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest | ARCH="$arch" python3 -c '
+import json, os, sys
+print(next((a["url"] for a in json.load(sys.stdin)["assets"] if a["name"].endswith(os.environ["ARCH"] + ".rpm")), ""))')
+  if [[ -z $asset_url ]]; then
+    echo "Found no ${arch} .rpm in the latest Lumi release" >&2
+    exit 1
+  fi
+  lumi_rpm=/tmp/lumi-launcher.${arch}.rpm
   curl -fsSL -H 'Accept: application/octet-stream' -o "$lumi_rpm" "$asset_url"
 fi
 dnf5 install -y "$lumi_rpm" plocate
 test -x /usr/bin/lumi
+test "$(rpm -q --qf '%{ARCH}' lumi-launcher)" = "$arch"
 
 # The Fedora logo in the corner of the desktop; Lumi OS has its own wallpaper.
 dnf5 remove -y gnome-shell-extension-background-logo || true
@@ -49,3 +55,36 @@ grep -q '^VARIANT_ID=' /usr/lib/os-release && sed -i 's/^VARIANT_ID=.*/VARIANT_I
 
 # plocate's index refreshes daily, so Lumi finds files by name.
 systemctl enable plocate-updatedb.timer
+
+# Branding: Lumi logo in Settings → About, first setup and the login screen.
+# os-release LOGO= names the icon (installed in hicolor by system_files).
+sed -i '/^LOGO=/d' /usr/lib/os-release
+echo 'LOGO=lumi-logo' >> /usr/lib/os-release
+# Anything that still asks for the Fedora logo files gets the Lumi ghost of the same size.
+for f in $(find /usr/share/icons /usr/share/pixmaps -type f \( -name 'fedora-logo*' -o -name 'fedora-gdm-logo*' -o -name 'system-logo*' -o -name 'fedora_logo*' \) \
+    -name '*.png' 2>/dev/null); do
+  size=$(basename "$(dirname "$(dirname "$f")")" | grep -o '^[0-9]*' || true)
+  case "$f" in
+    */pixmaps/*) cp -f /usr/share/pixmaps/lumi-logo.png "$f" ;;
+    *) [ -n "$size" ] && [ -f "/usr/share/icons/hicolor/${size}x${size}/apps/lumi-logo.png" ] \
+         && cp -f "/usr/share/icons/hicolor/${size}x${size}/apps/lumi-logo.png" "$f" ;;
+  esac
+done
+gtk-update-icon-cache -f /usr/share/icons/hicolor || true
+
+# GDM login screen settings (dconf database "gdm" is part of GDM's profile).
+dconf update
+
+# Boot splash: the script plugin the theme needs is a separate package.
+dnf5 install -y plymouth-plugin-script
+
+# Make Lumi the default Plymouth theme and rebuild the initramfs, which bootc boots from.
+plymouth-set-default-theme lumi
+kver=$(cd /usr/lib/modules && echo *)
+DRACUT_NO_XATTR=1 dracut --no-hostonly --kver "$kver" --reproducible --add "ostree plymouth" -f "/usr/lib/modules/$kver/initramfs.img"
+chmod 0600 "/usr/lib/modules/$kver/initramfs.img"
+
+# Firefox in Russian: the langpacks are installed, and Firefox follows the system language (set in first setup).
+if rpm -q firefox >/dev/null 2>&1; then
+  dnf5 install -y firefox-langpacks
+fi
