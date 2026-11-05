@@ -1,0 +1,171 @@
+---
+name: Release ISO
+
+# Builds the installer ISO and attaches it to a GitHub Release, so it can be
+# downloaded without a GitHub account (workflow artifacts need one).
+#
+# Start it by pushing a version tag (git tag v0.1.0 && git push origin v0.1.0)
+# or from Actions -> Release ISO -> Run workflow with a version.
+# The release is created as a draft: check the notes, then press "Publish".
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag, e.g. v0.1.0 (created on the selected branch if it does not exist)"
+        required: true
+        type: string
+
+env:
+  IMAGE_NAME: ${{ github.event.repository.name }} # output of build.yml, keep in sync
+  IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"  # do not edit
+  DEFAULT_TAG: "latest"
+  BIB_IMAGE: "quay.io/centos-bootc/bootc-image-builder:latest"
+  # GitHub refuses release assets of 2 GiB (2147483648 bytes) or more.
+  # The offline ISO carries the whole OS image (about 2.8 GiB compressed on
+  # ghcr.io) plus the Anaconda installer, about 3.9 GiB in all, so it cannot
+  # fit in one asset. Anything bigger is split into parts of this size
+  # (2000 MiB, under the limit); the release notes explain how to join them.
+  PART_SIZE: "2000M"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build ISO and release
+    # Ubuntu 26.04 runners can't mount inside bootc-image-builder (ublue-os/image-template#269), so stay on 24.04.
+    # x86-64 only for now.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Prepare environment
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION:-${GITHUB_REF_NAME}}"
+          if [[ ! "${VERSION}" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+            echo "::error::Version must look like v0.1.0, got '${VERSION}'"
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "ISO_NAME=lumi-os-${VERSION}-x86_64.iso" >> "${GITHUB_ENV}"
+          echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> "${GITHUB_ENV}"
+          echo "IMAGE_NAME=${IMAGE_NAME,,}" >> "${GITHUB_ENV}"
+          echo "USER_UID=$(id -u)" >> "${GITHUB_ENV}"
+          echo "USER_GID=$(id -g)" >> "${GITHUB_ENV}"
+
+      - name: Refuse to overwrite a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft 2>/dev/null | grep -qx false; then
+            echo "::error::Release ${VERSION} is already published. Use a new version."
+            exit 1
+          fi
+
+      - name: Record the image digest
+        run: |
+          DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}")
+          echo "IMAGE_DIGEST=${DIGEST}" >> "${GITHUB_ENV}"
+          echo "Building from ${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+
+      - name: Maximize build space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+        with:
+          remove-codeql: true
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build ISO
+        id: build
+        uses: osbuild/bootc-image-builder-action@8661cd3832544ad68c12dcde8681b13ab0f56a8d # main
+        with:
+          builder-image: ${{ env.BIB_IMAGE }}
+          config-file: ./disk_config/iso.toml
+          image: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}
+          chown: ${{ env.USER_UID }}:${{ env.USER_GID }}
+          types: anaconda-iso
+          additional-args: --use-librepo=True --rootfs btrfs
+
+      - name: Prepare release assets
+        env:
+          ISO_PATH: ${{ steps.build.outputs.anaconda-iso-output-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          mv "${ISO_PATH}" "release/${ISO_NAME}"
+          cd release
+
+          ISO_SIZE=$(stat -c %s "${ISO_NAME}")
+          echo "ISO size: ${ISO_SIZE} bytes ($(numfmt --to=iec-i --suffix=B "${ISO_SIZE}"))"
+          echo "ISO_SIZE=${ISO_SIZE}" >> "${GITHUB_ENV}"
+
+          # The checksum of the whole ISO always comes first, so people can check the
+          # file they put back together.
+          sha256sum "${ISO_NAME}" > SHA256SUMS
+
+          LIMIT=2147483648
+          if (( ISO_SIZE >= LIMIT )); then
+            split --bytes="${PART_SIZE}" --numeric-suffixes=1 --suffix-length=2 \
+              "${ISO_NAME}" "${ISO_NAME}.part"
+            rm "${ISO_NAME}"
+            sha256sum "${ISO_NAME}".part* >> SHA256SUMS
+            echo "SPLIT=true" >> "${GITHUB_ENV}"
+          else
+            echo "SPLIT=false" >> "${GITHUB_ENV}"
+          fi
+
+          for f in *; do
+            size=$(stat -c %s "$f")
+            if (( size >= LIMIT )); then
+              echo "::error::$f is ${size} bytes, over GitHub's 2 GiB limit"
+              exit 1
+            fi
+          done
+          ls -l
+          cat SHA256SUMS
+
+      - name: Write release notes
+        run: |
+          python3 .github/release/render_notes.py \
+            --template .github/release/notes.md \
+            --version "${VERSION}" \
+            --iso "${ISO_NAME}" \
+            --iso-size "${ISO_SIZE}" \
+            --image "${IMAGE_REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --parts release \
+            > release-notes.md
+          cat release-notes.md
+
+      - name: Create draft release and upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            # A draft from an earlier run: refresh notes and replace the files.
+            gh release edit "${VERSION}" --repo "${GITHUB_REPOSITORY}" --notes-file release-notes.md
+            gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' |
+              while read -r name; do
+                gh release delete-asset "${VERSION}" "$name" --repo "${GITHUB_REPOSITORY}" --yes
+              done
+          else
+            gh release create "${VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "Lumi OS ${VERSION}" \
+              --notes-file release-notes.md \
+              --draft
+          fi
+          gh release upload "${VERSION}" release/* --repo "${GITHUB_REPOSITORY}" --clobber
+          echo "Draft release ready: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases (press Publish when the notes look right)" >> "${GITHUB_STEP_SUMMARY}"

@@ -22,9 +22,11 @@ systemctl reboot
 
 Going back: `sudo bootc switch` to the image you had, or pick the previous entry in the boot menu.
 
-**From scratch:** the ISO is built by the "Build disk images" workflow (Actions → Build disk images → Run workflow) and attached to that run.
+**From scratch:** download the installer ISO from [Releases](https://github.com/AlbertS15/lumi-os/releases/latest) (no GitHub account needed) and write it to a USB stick with [Fedora Media Writer](https://fedoraproject.org/workstation/download) or [balenaEtcher](https://etcher.balena.io). GitHub limits release files to 2 GiB, so a bigger ISO comes in parts; the release notes show how to join them and check the checksum. The release ISO is x86-64 only for now, and this is an early version: the installer erases the disk you pick.
 
-**ARM (Apple Silicon Macs in UTM, ARM laptops):** the image is multi-arch (amd64 and arm64), so the same `bootc switch` works on aarch64. For a VM, run "Build disk images" with platform `arm64` (or `both`) and use the `qcow2-arm64` or `anaconda-iso-arm64` artifact.
+New releases come from the "Release ISO" workflow: push a `v*` tag, or Actions → Release ISO → Run workflow with a version. It builds the ISO, attaches it with `SHA256SUMS` to a draft release, and the draft is published by hand.
+
+**ARM (Apple Silicon Macs in UTM, ARM laptops):** the image is multi-arch (amd64 and arm64), so the same `bootc switch` works on aarch64. For a VM, run "Build disk images" (Actions → Build disk images → Run workflow) with platform `arm64` (or `both`) and use the `qcow2-arm64` or `anaconda-iso-arm64` artifact.
 
 ## How it's built
 

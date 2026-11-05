@@ -1,0 +1,119 @@
+---
+name: Boot test
+
+# Boots the qcow2 from "Build disk images" in QEMU/KVM and checks that GNOME comes up with Lumi running and Ctrl+Space
+# opening its bar. The image itself is not changed: tests/boot/run.sh adds a test account and GDM autologin only
+# inside the test VM, as systemd credentials.
+on:
+  workflow_run:
+    workflows: ["Build disk images"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      disk-run-id:
+        description: "Run ID of a 'Build disk images' run to test (empty: the newest qcow2-amd64 artifact)"
+        required: false
+        type: string
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tests/boot/**'
+      - '.github/workflows/boot-test.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  boot-test:
+    name: Boot qcow2 and check Lumi
+    # After a disk build only when it succeeded and uploaded images (pull request builds don't upload).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Find the disk image
+        id: disk
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.disk-run-id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RUN_ID" ]]; then
+            RUN_ID=$(gh api "repos/$REPO/actions/artifacts?name=qcow2-amd64&per_page=20" \
+              --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')
+          fi
+          if [[ -z "$RUN_ID" ]]; then
+            echo "::error::No qcow2-amd64 artifact found; run 'Build disk images' first."
+            exit 1
+          fi
+          # Only the amd64 disk can boot on this x86_64 runner; a run that built just arm64 has no such artifact.
+          found=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            --jq '[.artifacts[] | select(.name == "qcow2-amd64" and (.expired | not))] | length')
+          if [[ "$found" == "0" ]]; then
+            echo "::notice::Run $RUN_ID has no qcow2-amd64 artifact (arm64 only?); the boot test only runs x86_64."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Testing the qcow2 from https://github.com/$REPO/actions/runs/$RUN_ID"
+          echo "run-id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download the qcow2
+        if: steps.disk.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "${{ steps.disk.outputs.run-id }}" -R "${{ github.repository }}" -n qcow2-amd64 -D "$RUNNER_TEMP/disk"
+          disk=$(find "$RUNNER_TEMP/disk" -name '*.qcow2' | head -1)
+          test -n "$disk"
+          ls -la "$disk"
+          echo "DISK=$disk" >> "$GITHUB_ENV"
+
+      - name: Install QEMU and enable KVM
+        if: steps.disk.outputs.skip != 'true'
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf socat imagemagick
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+          qemu-img info "$DISK"
+
+      - name: Boot and check
+        if: steps.disk.outputs.skip != 'true'
+        run: tests/boot/run.sh "$DISK" "$RUNNER_TEMP/boot-test"
+
+      - name: Summary
+        if: always() && steps.disk.outputs.skip != 'true'
+        run: |
+          {
+            echo "### Lumi OS boot test"
+            echo "qcow2 from run ${{ steps.disk.outputs.run-id }}"
+            echo '```'
+            cat "$RUNNER_TEMP/boot-test/results.txt" 2>/dev/null || echo "no results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload screenshots and logs
+        if: always() && steps.disk.outputs.skip != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: boot-test
+          path: ${{ runner.temp }}/boot-test
+          if-no-files-found: warn
+          retention-days: 14
