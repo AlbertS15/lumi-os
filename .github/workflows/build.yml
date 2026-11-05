@@ -104,7 +104,10 @@ jobs:
       - name: Lumi .rpm for this CPU
         id: lumi
         run: |
-          if curl -fsSL https://api.github.com/repos/AlbertS15/Lumi/releases/latest |
+          # x86_64 needs the latest stable release; aarch64 may come from a pre-release (see .github/actions/lumi-rpm).
+          api=https://api.github.com/repos/AlbertS15/Lumi/releases/latest
+          [ '${{ matrix.arch }}' = x86_64 ] || api='https://api.github.com/repos/AlbertS15/Lumi/releases?per_page=20'
+          if curl -fsSL "$api" |
               grep -q '"browser_download_url": *"[^"]*-${{ matrix.arch }}\.rpm"'; then
             echo "available=true" >> $GITHUB_OUTPUT
           elif [ '${{ matrix.platform }}' = amd64 ]; then
@@ -114,6 +117,13 @@ jobs:
             echo "available=false" >> $GITHUB_OUTPUT
             echo "::warning::The latest Lumi release has no ${{ matrix.arch }} .rpm yet; skipping the ${{ matrix.platform }} build"
           fi
+
+      # Lumi's rpm from its latest release, cached per release (see build_files/build.sh).
+      - name: Lumi rpm
+        if: steps.lumi.outputs.available == 'true'
+        uses: ./.github/actions/lumi-rpm
+        with:
+          arch: ${{ matrix.arch }}
 
       # This actually builds the container image
       - name: Build Image

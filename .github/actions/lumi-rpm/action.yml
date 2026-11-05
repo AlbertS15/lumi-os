@@ -1,0 +1,73 @@
+name: Lumi rpm
+description: >
+  Puts the .rpm of Lumi's latest release into build_files/lumi-rpm/ for build.sh.
+  The file is cached per release, so the daily build fetches it only once per new release
+  and does not inflate the release's public download counter.
+
+inputs:
+  arch:
+    description: CPU of the rpm, x86_64 or aarch64
+    default: x86_64
+
+outputs:
+  tag:
+    description: Tag of the latest Lumi release
+    value: ${{ steps.release.outputs.tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Find the latest Lumi release
+      id: release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ARCH: ${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+        # Reading release metadata through the API never counts as a download.
+        # x86_64 takes the latest stable release. aarch64 also takes pre-releases (v2.1.0-beta.1 and so
+        # on) until a stable release ships an aarch64 rpm: the newest release that has one.
+        if [ "$ARCH" = x86_64 ]; then
+          api=repos/AlbertS15/Lumi/releases/latest; pick='.'
+        else
+          api='repos/AlbertS15/Lumi/releases?per_page=20'
+          pick='[.[] | select(.draft | not) | select(any(.assets[]; .name | endswith(env.ARCH + ".rpm")))][0]'
+        fi
+        gh api "$api" \
+          --jq "$pick"' | .tag_name as $t | .assets[] | select(.name | endswith(env.ARCH + ".rpm")) | "tag=\($t)\nasset_id=\(.id)\nname=\(.name)"' \
+          | head -3 >> "$GITHUB_OUTPUT"
+
+    - name: Cache the rpm
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: build_files/lumi-rpm
+        # The asset id changes if a release's rpm is re-uploaded, so a fixed file is picked up too.
+        key: lumi-rpm-${{ inputs.arch }}-${{ steps.release.outputs.tag }}-${{ steps.release.outputs.asset_id }}
+
+    - name: Download the rpm
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ASSET_ID: ${{ steps.release.outputs.asset_id }}
+        NAME: ${{ steps.release.outputs.name }}
+      run: |
+        set -euo pipefail
+        mkdir -p build_files/lumi-rpm
+        # The API asset endpoint, not browser_download_url: the browser link is what the
+        # public download counter counts.
+        curl -fsSL --retry 3 -o "build_files/lumi-rpm/${NAME}" \
+          -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/octet-stream' \
+          "https://api.github.com/repos/AlbertS15/Lumi/releases/assets/${ASSET_ID}"
+
+    - name: Check the rpm
+      shell: bash
+      run: |
+        set -euo pipefail
+        ls -l build_files/lumi-rpm/
+        rpm_file=$(ls build_files/lumi-rpm/*.rpm)
+        test "$(ls build_files/lumi-rpm/*.rpm | wc -l)" = 1
+        # An rpm starts with the lead magic ed ab ee db.
+        test "$(head -c4 "$rpm_file" | od -An -tx1 | tr -d ' \n')" = edabeedb

@@ -1,0 +1,134 @@
+---
+name: Boot benchmark
+
+# Builds main's image and this branch's image the same way, boots both in QEMU/KVM on ONE runner
+# (boots interleaved, so runner speed cancels out) and compares boot time and size.
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Containerfile'
+      - 'build_files/**'
+      - 'system_files/**'
+      - 'tools/boot-bench.sh'
+      - '.github/workflows/boot-bench.yml'
+  workflow_dispatch:
+    inputs:
+      boots:
+        description: "Boots per image (the first is the first-ever boot)"
+        default: "4"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  BOOTS: ${{ inputs.boots || '4' }}
+
+jobs:
+  measure:
+    name: Measure before and after
+    # bootc-image-builder can't mount on 24.04's successor yet (see build-disk.yml); 24.04 has /dev/kvm.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Maximize build space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+        with:
+          remove-codeql: true
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
+          ls -l /dev/kvm
+
+      - name: Lumi rpm
+        uses: ./.github/actions/lumi-rpm
+
+      # "before" is main as it is now, built exactly like "after" (the published image goes through
+      # another pipeline, so comparing against it would measure the pipeline, not the change).
+      # main's build.sh downloads Lumi's rpm from the public link; swap that for the cached rpm,
+      # which installs the same file without bumping the download counter.
+      - name: Build before (base commit) and after (this branch)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: |
+          set -euo pipefail
+          git worktree add ../base "$BASE_SHA"
+          cp -r build_files/lumi-rpm ../base/build_files/lumi-rpm
+          python3 - <<'PY'
+          import re
+          p = "../base/build_files/build.sh"
+          s = open(p).read()
+          s, n = re.subn(r'rpm_url=.*?\ndnf5 install -y "\$rpm_url" plocate',
+                         'dnf5 install -y /ctx/lumi-rpm/*.rpm plocate', s, flags=re.S)
+          assert n == 1, "base build.sh has an unexpected rpm step"
+          open(p, "w").write(s)
+          PY
+          sudo podman pull ghcr.io/ublue-os/silverblue-main:latest
+          sudo podman build --pull=never -t localhost/lumi-os:before -f ../base/Containerfile ../base
+          sudo podman build --pull=never -t localhost/lumi-os:after -f Containerfile .
+
+      - name: Measure
+        run: sudo BENCH_TMP=/mnt tools/boot-bench.sh bench "$BOOTS" before=localhost/lumi-os:before after=localhost/lumi-os:after
+
+      - name: Upload the measurements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench
+          path: bench
+          if-no-files-found: warn
+
+      - name: Table
+        run: |
+          set -euo pipefail
+          # Median of the repeat boots (2..N) per column; boot 1 is shown separately.
+          med() { awk -F, -v c="$2" 'NR>2 { print $c }' "$1/summary.csv" | sort -n |
+            awk '{ a[NR]=$1 } END { if (NR%2) print a[(NR+1)/2]; else printf "%.3f\n", (a[NR/2]+a[NR/2+1])/2 }'; }
+          first() { awk -F, -v c="$2" 'NR==2 { print $c }' "$1/summary.csv"; }
+          stat() { awk -v k="$2" '$1==k { print $2 }' "$1/image-stats.txt"; }
+          gib() { awk '{ printf "%.2f GiB", $1/1024/1024/1024 }'; }
+          b=bench/before; a=bench/after
+          {
+            echo "| | before | after |"
+            echo "|---|---:|---:|"
+            for col in 2:kernel 3:initrd 4:userspace 5:total 6:graphical.target; do
+              c=${col%%:*}; n=${col#*:}
+              echo "| $n, s (median of boots 2-$BOOTS) | $(med $b $c) | $(med $a $c) |"
+            done
+            echo "| total, s (first boot) | $(first $b 5) | $(first $a 5) |"
+            echo "| graphical.target, s (first boot) | $(first $b 6) | $(first $a 6) |"
+            echo "| image size (podman, uncompressed) | $(gib < $b/image-bytes.txt) | $(gib < $a/image-bytes.txt) |"
+            echo "| /usr | $(stat $b usr_bytes | gib) | $(stat $a usr_bytes | gib) |"
+            echo "| rpm packages | $(stat $b rpm_count) | $(stat $a rpm_count) |"
+            echo "| qcow2 on disk | $(gib < $b/qcow2-bytes.txt) | $(gib < $a/qcow2-bytes.txt) |"
+            echo
+            echo "Removed packages:"; echo '```'
+            comm -23 <(cut -f2 $b/rpms-by-size.txt | sort) <(cut -f2 $a/rpms-by-size.txt | sort)
+            echo '```'
+            echo "Units no longer enabled:"; echo '```'
+            comm -23 <(awk '{print $1}' $b/enabled-units.txt | sort) <(awk '{print $1}' $a/enabled-units.txt | sort)
+            echo '```'
+            echo "Failed units, boot 2: before / after"; echo '```'
+            cat $b/boot-2-failed.txt; echo ---; cat $a/boot-2-failed.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          for v in before after; do
+            for n in $(seq 1 "$BOOTS"); do
+              echo "<details><summary>$v, boot $n</summary>"; echo; echo '```'
+              cat bench/$v/boot-$n-analyze.txt; echo
+              head -30 bench/$v/boot-$n-blame.txt; echo
+              cat bench/$v/boot-$n-critical-chain.txt
+              echo '```'; echo "</details>"
+            done
+          done >> "$GITHUB_STEP_SUMMARY"
