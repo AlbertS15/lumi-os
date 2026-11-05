@@ -33,7 +33,7 @@ New releases come from the "Release ISO" workflow: push a `v*` tag, or Actions â
 - `Containerfile` starts from `ghcr.io/ublue-os/silverblue-main:latest` and runs `build_files/build.sh`. Universal Blue builds that image for x86-64 only, so the arm64 image starts from `quay.io/fedora/fedora-silverblue` at the same Fedora version (without Universal Blue's extras such as RPM Fusion codecs).
 - `build_files/build.sh` installs Lumi's `.rpm` for the image's CPU (`x86_64` or `aarch64`) from the latest release and applies the files in `system_files/`.
 - `system_files/` holds the wallpaper, the GNOME defaults (`zz0-lumi-os.gschema.override`) and Lumi's autostart entry for new accounts.
-- `tools/wallpaper.py` draws the wallpaper.
+- `tools/wallpaper.py` draws the wallpaper; `tools/branding.py` draws the boot splash frames and the logos (About, first setup, login screen) from the same ghost sprite.
 - GitHub Actions rebuilds the image every day, so Fedora updates and new Lumi releases arrive on their own.
 
 Lumi OS is an independent project, not affiliated with Fedora, Red Hat or Universal Blue. Based on the Universal Blue [image template](https://github.com/ublue-os/image-template) (Apache-2.0).

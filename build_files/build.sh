@@ -35,3 +35,36 @@ grep -q '^VARIANT_ID=' /usr/lib/os-release && sed -i 's/^VARIANT_ID=.*/VARIANT_I
 
 # plocate's index refreshes daily, so Lumi finds files by name.
 systemctl enable plocate-updatedb.timer
+
+# Branding: Lumi logo in Settings → About, first setup and the login screen.
+# os-release LOGO= names the icon (installed in hicolor by system_files).
+sed -i '/^LOGO=/d' /usr/lib/os-release
+echo 'LOGO=lumi-logo' >> /usr/lib/os-release
+# Anything that still asks for the Fedora logo files gets the Lumi ghost of the same size.
+for f in $(find /usr/share/icons /usr/share/pixmaps -type f \( -name 'fedora-logo*' -o -name 'fedora-gdm-logo*' -o -name 'system-logo*' -o -name 'fedora_logo*' \) \
+    -name '*.png' 2>/dev/null); do
+  size=$(basename "$(dirname "$(dirname "$f")")" | grep -o '^[0-9]*' || true)
+  case "$f" in
+    */pixmaps/*) cp -f /usr/share/pixmaps/lumi-logo.png "$f" ;;
+    *) [ -n "$size" ] && [ -f "/usr/share/icons/hicolor/${size}x${size}/apps/lumi-logo.png" ] \
+         && cp -f "/usr/share/icons/hicolor/${size}x${size}/apps/lumi-logo.png" "$f" ;;
+  esac
+done
+gtk-update-icon-cache -f /usr/share/icons/hicolor || true
+
+# GDM login screen settings (dconf database "gdm" is part of GDM's profile).
+dconf update
+
+# Boot splash: the script plugin the theme needs is a separate package.
+dnf5 install -y plymouth-plugin-script
+
+# Make Lumi the default Plymouth theme and rebuild the initramfs, which bootc boots from.
+plymouth-set-default-theme lumi
+kver=$(cd /usr/lib/modules && echo *)
+DRACUT_NO_XATTR=1 dracut --no-hostonly --kver "$kver" --reproducible --add "ostree plymouth" -f "/usr/lib/modules/$kver/initramfs.img"
+chmod 0600 "/usr/lib/modules/$kver/initramfs.img"
+
+# Firefox in Russian: the langpacks are installed, and Firefox follows the system language (set in first setup).
+if rpm -q firefox >/dev/null 2>&1; then
+  dnf5 install -y firefox-langpacks
+fi

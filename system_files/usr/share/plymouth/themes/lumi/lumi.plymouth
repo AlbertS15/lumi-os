@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Lumi
+Description=The Lumi ghost on a dark screen
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/lumi
+ScriptFile=/usr/share/plymouth/themes/lumi/lumi.script
